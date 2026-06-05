@@ -27,7 +27,7 @@ pipeline {
             }
         }
 
-        # ---------------- BUILD ----------------
+         
         stage('Build Maven') {
             steps {
                 echo "========== MAVEN BUILD =========="
@@ -47,7 +47,7 @@ pipeline {
             }
         }
 
-        # ---------------- SONARQUBE ----------------
+       
         stage('SonarQube Analysis') {
             steps {
                 echo "========== SONARQUBE =========="
@@ -60,7 +60,6 @@ pipeline {
             }
         }
 
-        # ---------------- NEXUS (ARTIFACT REPO) ----------------
         stage('Deploy to Nexus') {
             steps {
                 echo "========== NEXUS DEPLOY =========="
@@ -81,7 +80,6 @@ pipeline {
             }
         }
 
-        # ---------------- DOCKER ----------------
         stage('Docker Build') {
             steps {
                 echo "========== DOCKER BUILD =========="
@@ -113,7 +111,6 @@ pipeline {
             }
         }
 
-        # ---------------- DEPLOY ----------------
         stage('Deploy to Kubernetes') {
             steps {
                 echo "========== K8S DEPLOY =========="
