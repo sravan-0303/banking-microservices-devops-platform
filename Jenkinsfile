@@ -1,5 +1,10 @@
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'maven:3.9.6-eclipse-temurin-17'
+            args '-v /root/.m2:/root/.m2'
+        }
+    }
 
     environment {
 
@@ -21,13 +26,13 @@ pipeline {
                 sh '''
                     pwd
                     ls -la
-                    java -version || true
-                    mvn -version || true
+                    java -version
+                    mvn -version
                 '''
             }
         }
 
-         
+       
         stage('Build Maven') {
             steps {
                 echo "========== MAVEN BUILD =========="
@@ -47,7 +52,6 @@ pipeline {
             }
         }
 
-       
         stage('SonarQube Analysis') {
             steps {
                 echo "========== SONARQUBE =========="
@@ -117,16 +121,17 @@ pipeline {
 
                 sh '''
                     kubectl set image deployment/banking-app \
-                    banking-app=$HARBOR_REGISTRY/$IMAGE_NAME:$TAG
+                    banking-app=$HARBOR_REGISTRY/$IMAGE_NAME:$TAG -n banking
 
-                    kubectl rollout status deployment/banking-app
-                    kubectl get pods -o wide
+                    kubectl rollout status deployment/banking-app -n banking
+                    kubectl get pods -n banking -o wide
                 '''
             }
         }
     }
 
     post {
+
         success {
             echo "========== PIPELINE SUCCESS =========="
         }
@@ -137,8 +142,8 @@ pipeline {
 
         always {
             sh '''
-                echo "Build: ${BUILD_NUMBER}"
-                echo "Job: ${JOB_NAME}"
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Job Name: ${JOB_NAME}"
                 echo "Workspace: ${WORKSPACE}"
             '''
         }
