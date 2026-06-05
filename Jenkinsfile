@@ -1,8 +1,31 @@
 pipeline {
+
     agent {
-        docker {
-            image 'maven:3.9.6-eclipse-temurin-17'
-            args '-v /root/.m2:/root/.m2'
+        kubernetes {
+            label 'banking-agent'
+            defaultContainer 'maven'
+
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+
+  - name: maven
+    image: maven:3.9.6-eclipse-temurin-17
+    command: ['cat']
+    tty: true
+
+  - name: docker
+    image: docker:24-dind
+    command: ['cat']
+    tty: true
+
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+"""
         }
     }
 
@@ -19,113 +42,118 @@ pipeline {
 
     stages {
 
-        stage('Pre-Check') {
+        stage('Checkout Code') {
             steps {
-                echo "========== PRECHECK =========="
-
-                sh '''
-                    pwd
-                    ls -la
-                    java -version
-                    mvn -version
-                '''
+                checkout scm
             }
         }
 
-       
+        stage('Pre-Check') {
+            steps {
+                container('maven') {
+                    sh '''
+                        pwd
+                        ls -la
+                        java -version
+                        mvn -version
+                    '''
+                }
+            }
+        }
+
         stage('Build Maven') {
             steps {
-                echo "========== MAVEN BUILD =========="
-
-                sh '''
-                    mvn clean package -DskipTests
-                '''
+                container('maven') {
+                    sh 'mvn clean package -DskipTests'
+                }
             }
         }
 
         stage('Verify Artifact') {
             steps {
-                sh '''
-                    ls -lh target/
-                    find target -name "*.jar"
-                '''
+                container('maven') {
+                    sh '''
+                        ls -lh target/
+                        find target -name "*.jar"
+                    '''
+                }
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                echo "========== SONARQUBE =========="
-
-                sh '''
-                    mvn sonar:sonar \
-                    -Dsonar.host.url=${SONAR_HOST_URL} \
-                    -Dsonar.login=${SONAR_TOKEN}
-                '''
+                container('maven') {
+                    sh """
+                        mvn sonar:sonar \
+                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                        -Dsonar.login=${SONAR_TOKEN}
+                    """
+                }
             }
         }
 
         stage('Deploy to Nexus') {
             steps {
-                echo "========== NEXUS DEPLOY =========="
+                container('maven') {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'nexus-creds',
+                        usernameVariable: 'NEXUS_USER',
+                        passwordVariable: 'NEXUS_PASS'
+                    )]) {
 
-                withCredentials([usernamePassword(
-                    credentialsId: 'nexus-creds',
-                    usernameVariable: 'NEXUS_USER',
-                    passwordVariable: 'NEXUS_PASS'
-                )]) {
-
-                    sh '''
-                        mvn deploy -DskipTests \
-                        -DaltDeploymentRepository=nexus::default::${NEXUS_URL}/repository/maven-releases \
-                        -Dnexus.username=${NEXUS_USER} \
-                        -Dnexus.password=${NEXUS_PASS}
-                    '''
+                        sh """
+                            mvn deploy -DskipTests \
+                            -DaltDeploymentRepository=nexus::default::${NEXUS_URL}/repository/maven-releases \
+                            -Dnexus.username=${NEXUS_USER} \
+                            -Dnexus.password=${NEXUS_PASS}
+                        """
+                    }
                 }
             }
         }
 
         stage('Docker Build') {
             steps {
-                echo "========== DOCKER BUILD =========="
-
-                sh '''
-                    docker build -t $HARBOR_REGISTRY/$IMAGE_NAME:$TAG .
-                    docker tag $HARBOR_REGISTRY/$IMAGE_NAME:$TAG $HARBOR_REGISTRY/$IMAGE_NAME:latest
-                '''
+                container('docker') {
+                    sh """
+                        docker build -t $HARBOR_REGISTRY/$IMAGE_NAME:$TAG .
+                        docker tag $HARBOR_REGISTRY/$IMAGE_NAME:$TAG $HARBOR_REGISTRY/$IMAGE_NAME:latest
+                    """
+                }
             }
         }
 
-        stage('Harbor Login & Push') {
+        stage('Harbor Push') {
             steps {
-                echo "========== HARBOR PUSH =========="
+                container('docker') {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'harbor-creds',
+                        usernameVariable: 'H_USER',
+                        passwordVariable: 'H_PASS'
+                    )]) {
 
-                withCredentials([usernamePassword(
-                    credentialsId: 'harbor-creds',
-                    usernameVariable: 'H_USER',
-                    passwordVariable: 'H_PASS'
-                )]) {
+                        sh """
+                            echo $H_PASS | docker login harbor.local -u $H_USER --password-stdin
 
-                    sh '''
-                        echo $H_PASS | docker login harbor.local -u $H_USER --password-stdin
-
-                        docker push $HARBOR_REGISTRY/$IMAGE_NAME:$TAG
-                        docker push $HARBOR_REGISTRY/$IMAGE_NAME:latest
-                    '''
+                            docker push $HARBOR_REGISTRY/$IMAGE_NAME:$TAG
+                            docker push $HARBOR_REGISTRY/$IMAGE_NAME:latest
+                        """
+                    }
                 }
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                echo "========== K8S DEPLOY =========="
+                container('kubectl') {
+                    sh """
+                        kubectl set image deployment/banking-app \
+                        banking-app=$HARBOR_REGISTRY/$IMAGE_NAME:$TAG -n banking
 
-                sh '''
-                    kubectl set image deployment/banking-app \
-                    banking-app=$HARBOR_REGISTRY/$IMAGE_NAME:$TAG -n banking
-
-                    kubectl rollout status deployment/banking-app -n banking
-                    kubectl get pods -n banking -o wide
-                '''
+                        kubectl rollout status deployment/banking-app -n banking
+                        kubectl get pods -n banking -o wide
+                    """
+                }
             }
         }
     }
@@ -142,8 +170,8 @@ pipeline {
 
         always {
             sh '''
-                echo "Build Number: ${BUILD_NUMBER}"
-                echo "Job Name: ${JOB_NAME}"
+                echo "Build: ${BUILD_NUMBER}"
+                echo "Job: ${JOB_NAME}"
                 echo "Workspace: ${WORKSPACE}"
             '''
         }
